@@ -35,11 +35,13 @@
         .sidebar {
             width: 220px;
             background: #ffffff;
-            padding: 32px 0;
+            padding: 32px 0 0 0;
             position: fixed;
             height: 100vh;
             overflow-y: auto;
             box-shadow: 2px 0 8px rgba(0, 0, 0, 0.04);
+            display: flex;
+            flex-direction: column;
         }
 
         .sidebar-header {
@@ -661,6 +663,34 @@
     </style>
 </head>
 <body>
+
+    <!-- ログイン画面 -->
+    <div id="login-screen" style="display:flex; align-items:center; justify-content:center; min-height:100vh; background:#f7f9fa;">
+        <div style="background:#fff; padding:48px; border-radius:12px; box-shadow:0 4px 24px rgba(0,0,0,0.08); width:100%; max-width:400px;">
+            <div style="text-align:center; margin-bottom:32px;">
+                <div style="font-size:24px; font-weight:700; color:#1a1a1a;">有給管理システム</div>
+                <div style="font-size:14px; color:#888; margin-top:8px;">管理者ログイン</div>
+            </div>
+            <div style="margin-bottom:16px;">
+                <label style="font-size:13px; font-weight:600; color:#555; display:block; margin-bottom:6px;">メールアドレス</label>
+                <input type="email" id="login-email" class="form-input" placeholder="admin@example.com" style="width:100%;">
+            </div>
+            <div style="margin-bottom:24px;">
+                <label style="font-size:13px; font-weight:600; color:#555; display:block; margin-bottom:6px;">パスワード</label>
+                <input type="password" id="login-password" class="form-input" placeholder="パスワード" style="width:100%;" onkeydown="if(event.key==='Enter')login()">
+            </div>
+            <div id="login-error" style="color:#d63031; font-size:13px; margin-bottom:12px; text-align:center;"></div>
+            <button class="btn btn-primary" onclick="login()" style="width:100%;">ログイン</button>
+        </div>
+    </div>
+
+    <!-- ローディング -->
+    <div id="loading-overlay" style="display:none; position:fixed; inset:0; background:rgba(255,255,255,0.8); align-items:center; justify-content:center; z-index:9999; font-size:16px; color:#555;">
+        読み込み中...
+    </div>
+
+    <!-- アプリ本体 -->
+    <div id="app-screen" style="display:none; width:100%; min-height:100vh;">
     <div class="app-container">
         <!-- ━━━━━━━━━━━━━━━━━━
              左サイドバー
@@ -668,9 +698,9 @@
         <aside class="sidebar">
             <div class="sidebar-header">
                 <div class="sidebar-title">有給管理システム</div>
-                <div class="sidebar-subtitle">管理者</div>
+                <div class="sidebar-subtitle" id="current-user-email" style="font-size:11px; word-break:break-all;"></div>
             </div>
-            <nav>
+            <nav style="flex:1;">
                 <ul class="sidebar-nav">
                     <li><a href="javascript:void(0);" class="active" data-page="dashboard">ダッシュボード</a></li>
                     <li><a href="javascript:void(0);" data-page="employees">従業員一覧</a></li>
@@ -680,6 +710,9 @@
                     <li><a href="javascript:void(0);" data-page="settings">システム設定</a></li>
                 </ul>
             </nav>
+            <div style="padding:16px; border-top:1px solid #e8e8e8; margin-top:auto;">
+                <button class="btn btn-secondary" onclick="logout()" style="width:100%; font-size:13px;">ログアウト</button>
+            </div>
         </aside>
 
         <!-- ━━━━━━━━━━━━━━━━━━
@@ -1192,91 +1225,135 @@
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // 有給管理システム - 完全動作版
+        // 有給管理システム - Supabase版
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+        var SUPABASE_URL = 'https://esxadkckccnxxkppntik.supabase.co';
+        var SUPABASE_KEY = 'sb_publishable_wTgelyDZenudXfAnXqwecA_VEu5LYNB';
+        var supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
         var employeesData = [];
         var leaveRecords = [];
         var currentEmployeeId = null;
-        var STORAGE_KEY_EMPLOYEES = 'paidLeave_employees';
-        var STORAGE_KEY_RECORDS = 'paidLeave_records';
-        var STORAGE_KEY_EMP_COUNTER = 'paidLeave_empCounter';
-        var STORAGE_KEY_REC_COUNTER = 'paidLeave_recCounter';
+        var currentUser = null;
 
+        // ━━━ 初期化 ━━━
         function initSystem() {
+            supabase.auth.getSession().then(function(result) {
+                var session = result.data.session;
+                if (session) {
+                    currentUser = session.user;
+                    showApp();
+                } else {
+                    showLoginScreen();
+                }
+            });
+            // ログイン状態の変化を監視
+            supabase.auth.onAuthStateChange(function(event, session) {
+                if (event === 'SIGNED_IN') {
+                    currentUser = session.user;
+                    showApp();
+                } else if (event === 'SIGNED_OUT') {
+                    currentUser = null;
+                    showLoginScreen();
+                }
+            });
+        }
+
+        function showLoginScreen() {
+            document.getElementById('login-screen').style.display = 'flex';
+            document.getElementById('app-screen').style.display = 'none';
+        }
+
+        function showApp() {
+            document.getElementById('login-screen').style.display = 'none';
+            document.getElementById('app-screen').style.display = 'block';
+            document.getElementById('current-user-email').textContent = currentUser.email;
             loadData();
-            renderDashboard();
-            renderEmployeeList();
-            renderEmployeeSelect();
-            renderRegisterHistory();
-            renderHistory();
-            renderExpiring();
-            setupEventListeners();
         }
 
+        function login() {
+            var email = document.getElementById('login-email').value;
+            var password = document.getElementById('login-password').value;
+            var errorEl = document.getElementById('login-error');
+            errorEl.textContent = '';
+
+            supabase.auth.signInWithPassword({ email: email, password: password })
+                .then(function(result) {
+                    if (result.error) {
+                        errorEl.textContent = 'メールアドレスまたはパスワードが違います';
+                    }
+                });
+        }
+
+        function logout() {
+            if (confirm('ログアウトしますか？')) {
+                supabase.auth.signOut();
+            }
+        }
+
+        // ━━━ データ読み込み ━━━
         function loadData() {
-            var employeesJSON = localStorage.getItem(STORAGE_KEY_EMPLOYEES);
-            var recordsJSON = localStorage.getItem(STORAGE_KEY_RECORDS);
+            showLoading(true);
+            Promise.all([
+                supabase.from('employees').select('*').order('kana'),
+                supabase.from('leave_records').select('*').order('date')
+            ]).then(function(results) {
+                var empsResult = results[0];
+                var recsResult = results[1];
 
-            if (employeesJSON) {
-                employeesData = JSON.parse(employeesJSON);
-                // 欠損フィールドを修復
-                employeesData = employeesData.map(function(emp) {
+                if (empsResult.error) { console.error(empsResult.error); }
+                if (recsResult.error) { console.error(recsResult.error); }
+
+                // Supabaseのスネークケースをキャメルケースに変換
+                employeesData = (empsResult.data || []).map(function(e) {
                     return {
-                        id: parseInt(emp.id) || emp.id,
-                        name: emp.name || '',
-                        kana: emp.kana || '',
-                        hireDate: emp.hireDate || '',
-                        status: emp.status || 'active',
-                        retirementDate: emp.retirementDate || null,
-                        memo: emp.memo || ''
+                        id: e.id,
+                        name: e.name || '',
+                        kana: e.kana || '',
+                        hireDate: e.hire_date || '',
+                        status: e.status || 'active',
+                        retirementDate: e.retirement_date || null,
+                        memo: e.memo || ''
                     };
                 });
-                saveEmployees(); // 修復後に保存し直す
-            } else {
-                employeesData = [];
-                saveEmployees();
-            }
 
-            if (recordsJSON) {
-                leaveRecords = JSON.parse(recordsJSON);
-                // 欠損フィールドを修復
-                leaveRecords = leaveRecords.map(function(rec) {
+                leaveRecords = (recsResult.data || []).map(function(r) {
                     return {
-                        id: parseInt(rec.id) || rec.id,
-                        employeeId: parseInt(rec.employeeId),
-                        date: rec.date || '',
-                        type: parseFloat(rec.type) || 1.0,
-                        memo: rec.memo || '',
-                        createdAt: rec.createdAt || new Date().toISOString()
+                        id: r.id,
+                        employeeId: parseInt(r.employee_id),
+                        date: r.date || '',
+                        type: parseFloat(r.type) || 1.0,
+                        memo: r.memo || '',
+                        createdAt: r.created_at || ''
                     };
                 });
-                saveRecords(); // 修復後に保存し直す
-            } else {
-                leaveRecords = [];
-                saveRecords();
-            }
 
-            // カウンタが未設定の場合は既存データの最大IDから初期化
-            if (!localStorage.getItem(STORAGE_KEY_EMP_COUNTER) && employeesData.length > 0) {
-                var maxEmpId = Math.max.apply(null, employeesData.map(function(emp) { return emp.id; }));
-                localStorage.setItem(STORAGE_KEY_EMP_COUNTER, maxEmpId);
-            }
-            if (!localStorage.getItem(STORAGE_KEY_REC_COUNTER) && leaveRecords.length > 0) {
-                var maxRecId = Math.max.apply(null, leaveRecords.map(function(rec) { return rec.id; }));
-                localStorage.setItem(STORAGE_KEY_REC_COUNTER, maxRecId);
-            }
+                showLoading(false);
+                renderDashboard();
+                renderEmployeeList();
+                renderEmployeeSelect();
+                renderRegisterHistory();
+                renderHistory();
+                renderExpiring();
+                setupEventListeners();
+            });
         }
 
-        function saveEmployees() {
-            localStorage.setItem(STORAGE_KEY_EMPLOYEES, JSON.stringify(employeesData));
+        function showLoading(flag) {
+            var el = document.getElementById('loading-overlay');
+            if (el) el.style.display = flag ? 'flex' : 'none';
         }
 
-        function saveRecords() {
-            localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(leaveRecords));
-        }
+        // ━━━ データ保存（Supabase） ━━━
+        function saveEmployees() { /* Supabaseでは個別操作で保存 */ }
+        function saveRecords()   { /* Supabaseでは個別操作で保存 */ }
+
+        function getNextEmployeeId() { return null; } // Supabaseが自動採番
+        function getNextRecordId()   { return null; } // Supabaseが自動採番
 
         function getEmployeeById(id) {
             return employeesData.find(function(emp) { return emp.id === parseInt(id); });
@@ -2034,13 +2111,11 @@
 
         function deleteRecordFromDetail(recordId, employeeId) {
             if (confirm('この有給登録を取り消してもよろしいですか？')) {
-                leaveRecords = leaveRecords.filter(function(rec) { return rec.id !== recordId; });
-                saveRecords();
-                showEmployeeDetail(employeeId);
-                renderRegisterHistory();
-                renderHistory();
-                renderDashboard();
-                renderExpiring();
+                supabase.from('leave_records').delete().eq('id', recordId).then(function(result) {
+                    if (result.error) { alert('削除に失敗しました: ' + result.error.message); return; }
+                    loadData();
+                    setTimeout(function() { showEmployeeDetail(employeeId); }, 500);
+                });
             }
         }
 
@@ -2078,38 +2153,28 @@
         function confirmDeleteRecord() {
             var recordId = parseInt(document.getElementById('edit-record-modal').getAttribute('data-record-id'));
             if (confirm('この有給登録を取り消してもよろしいですか？')) {
-                leaveRecords = leaveRecords.filter(function(rec) {
-                    return rec.id !== recordId;
+                supabase.from('leave_records').delete().eq('id', recordId).then(function(result) {
+                    if (result.error) { alert('削除に失敗しました: ' + result.error.message); return; }
+                    closeModal('edit-record-modal');
+                    loadData();
+                    alert('有給登録を取り消しました');
                 });
-                saveRecords();
-                closeModal('edit-record-modal');
-                renderRegisterHistory();
-                renderHistory();
-                renderEmployeeList();
-                renderDashboard();
-                renderExpiring();
-                alert('有給登録を取り消しました');
             }
         }
 
         function editRecord(e) {
             e.preventDefault();
             var recordId = parseInt(document.getElementById('edit-record-modal').getAttribute('data-record-id'));
-            var rec = leaveRecords.find(function(r) { return r.id === recordId; });
-            if (!rec) return;
-
-            rec.date = document.getElementById('edit-record-date').value;
-            rec.type = parseFloat(document.getElementById('edit-record-type-value').value);
-            rec.memo = document.getElementById('edit-record-memo').value;
-
-            saveRecords();
-            closeModal('edit-record-modal');
-            renderRegisterHistory();
-            renderHistory();
-            renderEmployeeList();
-            renderDashboard();
-            renderExpiring();
-            alert('有給登録を修正しました');
+            supabase.from('leave_records').update({
+                date: document.getElementById('edit-record-date').value,
+                type: parseFloat(document.getElementById('edit-record-type-value').value),
+                memo: document.getElementById('edit-record-memo').value
+            }).eq('id', recordId).then(function(result) {
+                if (result.error) { alert('更新に失敗しました: ' + result.error.message); return; }
+                closeModal('edit-record-modal');
+                loadData();
+                alert('有給登録を修正しました');
+            });
         }
 
         function renderHistory() {
@@ -2238,125 +2303,79 @@
 
         function addEmployee(e) {
             e.preventDefault();
-
-            var name = document.getElementById('add-employee-name').value;
-            var kana = document.getElementById('add-employee-kana').value;
+            var name     = document.getElementById('add-employee-name').value;
+            var kana     = document.getElementById('add-employee-kana').value;
             var hireDate = document.getElementById('add-employee-date').value;
 
-            var newEmployee = {
-                id: getNextEmployeeId(),
-                name: name,
-                kana: kana,
-                hireDate: hireDate,
-                status: 'active',
-                retirementDate: null,
-                memo: ''
-            };
-
-            employeesData.push(newEmployee);
-            saveEmployees();
-            renderEmployeeList();
-            renderEmployeeSelect();
-            renderDashboard();
-            closeModal('add-employee-modal');
-            alert('従業員を追加しました');
+            supabase.from('employees').insert([{
+                name: name, kana: kana, hire_date: hireDate,
+                status: 'active', memo: ''
+            }]).select().then(function(result) {
+                if (result.error) { alert('追加に失敗しました: ' + result.error.message); return; }
+                closeModal('add-employee-modal');
+                loadData();
+                alert('従業員を追加しました');
+            });
         }
 
         function editEmployee(e) {
             e.preventDefault();
-
             var employeeId = parseInt(document.getElementById('edit-employee-modal').getAttribute('data-employee-id'));
-            var emp = getEmployeeById(employeeId);
-            if (!emp) return;
+            var status = document.getElementById('edit-employee-status').value;
+            var retirementDate = document.getElementById('edit-employee-retirement-date').value || null;
 
-            emp.name = document.getElementById('edit-employee-name').value;
-            emp.kana = document.getElementById('edit-employee-kana').value;
-            emp.hireDate = document.getElementById('edit-employee-date').value;
-            emp.status = document.getElementById('edit-employee-status').value;
-            emp.retirementDate = document.getElementById('edit-employee-retirement-date').value || null;
-            emp.memo = document.getElementById('edit-employee-memo').value;
-
-            saveEmployees();
-            renderEmployeeList();
-            renderEmployeeSelect();
-            renderDashboard();
-            renderRegisterHistory();
-            renderHistory();
-            renderExpiring();
-            closeModal('edit-employee-modal');
-            alert('従業員情報を更新しました');
+            supabase.from('employees').update({
+                name:            document.getElementById('edit-employee-name').value,
+                kana:            document.getElementById('edit-employee-kana').value,
+                hire_date:       document.getElementById('edit-employee-date').value,
+                status:          status,
+                retirement_date: retirementDate,
+                memo:            document.getElementById('edit-employee-memo').value
+            }).eq('id', employeeId).then(function(result) {
+                if (result.error) { alert('更新に失敗しました: ' + result.error.message); return; }
+                closeModal('edit-employee-modal');
+                loadData();
+                alert('従業員情報を更新しました');
+            });
         }
 
         function deleteEmployee() {
-            console.log('従業員削除処理開始');
             var employeeId = parseInt(document.getElementById('edit-employee-modal').getAttribute('data-employee-id'));
-            console.log('削除対象ID:', employeeId);
-            
-            var message = 'この従業員を削除してもよろしいですか？\n※ 有給の履歴も全て削除されます。';
-
-            if (confirm(message)) {
-                employeesData = employeesData.filter(function(emp) {
-                    return emp.id !== employeeId;
+            if (confirm('この従業員を削除してもよろしいですか？\n※ 有給の履歴も全て削除されます。')) {
+                supabase.from('employees').delete().eq('id', employeeId).then(function(result) {
+                    if (result.error) { alert('削除に失敗しました: ' + result.error.message); return; }
+                    closeModal('edit-employee-modal');
+                    loadData();
+                    alert('従業員を削除しました');
                 });
-                leaveRecords = leaveRecords.filter(function(rec) {
-                    return rec.employeeId !== employeeId;
-                });
-                saveEmployees();
-                saveRecords();
-                renderEmployeeList();
-                renderEmployeeSelect();
-                renderDashboard();
-                renderRegisterHistory();
-                renderHistory();
-                renderExpiring();
-                closeModal('edit-employee-modal');
-                alert('従業員を削除しました');
-                console.log('従業員削除完了');
-            } else {
-                console.log('削除キャンセル');
             }
         }
 
         function registerLeave(e) {
             e.preventDefault();
-            console.log('有給登録処理開始');
-
             var employeeId = parseInt(document.getElementById('employee-select').value);
-            var date = document.getElementById('leave-date').value;
-            var type = parseFloat(document.getElementById('leave-type-value').value);
-            var memo = document.getElementById('leave-memo').value;
-            
-            console.log('入力値: employeeId=' + employeeId + ' date=' + date + ' type=' + type + ' memo=' + memo);
+            var date       = document.getElementById('leave-date').value;
+            var type       = parseFloat(document.getElementById('leave-type-value').value);
+            var memo       = document.getElementById('leave-memo').value;
 
             if (!employeeId || !date) {
                 alert('従業員と日付を選択してください');
                 return;
             }
 
-            var newRecord = {
-                id: getNextRecordId(),
-                employeeId: parseInt(employeeId),
-                date: date,
-                type: parseFloat(type),
-                memo: memo,
-                createdAt: new Date().toISOString()
-            };
-
-            leaveRecords.push(newRecord);
-            saveRecords();
-
             var emp = getEmployeeById(employeeId);
-            alert('有給を登録しました\n従業員: ' + emp.name + '\n日付: ' + formatDate(date) + '\n区分: ' + type + '日');
-
-            document.getElementById('register-form').reset();
-            resetLeaveTypeButtons();
-            renderEmployeeSelect();
-            renderEmployeeList();
-            renderDashboard();
-            renderRegisterHistory();
-            renderHistory();
-            renderExpiring();
-            console.log('有給登録完了');
+            supabase.from('leave_records').insert([{
+                employee_id: employeeId,
+                date: date,
+                type: type,
+                memo: memo
+            }]).then(function(result) {
+                if (result.error) { alert('登録に失敗しました: ' + result.error.message); return; }
+                alert('有給を登録しました\n従業員: ' + emp.name + '\n日付: ' + formatDate(date) + '\n区分: ' + type + '日');
+                document.getElementById('register-form').reset();
+                resetLeaveTypeButtons();
+                loadData();
+            });
         }
 
         function selectLeaveType(button) {
@@ -2448,74 +2467,64 @@
         function importCSV() {
             var fileInput = document.getElementById('csv-file-input');
             var file = fileInput.files[0];
-            if (!file) {
-                alert('CSVファイルを選択してください');
-                return;
-            }
+            if (!file) { alert('CSVファイルを選択してください'); return; }
+
             var reader = new FileReader();
             reader.onload = function(e) {
-                var text = e.target.result;
-                // BOM除去
-                text = text.replace(/^\uFEFF/, '');
+                var text = e.target.result.replace(/^\uFEFF/, '');
                 var lines = text.split('\n').filter(function(l) { return l.trim() !== ''; });
-                if (lines.length < 2) {
-                    alert('データが空です');
-                    return;
-                }
-                var added = 0;
-                var skipped = 0;
-                // 1行目はヘッダーなのでスキップ
+                if (lines.length < 2) { alert('データが空です'); return; }
+
+                var tasks = [];
+                var empCache = {};
+
                 for (var i = 1; i < lines.length; i++) {
                     var cols = lines[i].split(',').map(function(c) { return c.trim().replace(/^"|"$/g, ''); });
-                    var name = cols[0];
-                    var kana = cols[1] || '';
-                    var hireDate = cols[2];
-                    var consumeDate = cols[3];
-                    var consumeType = cols[4];
-                    var memo = cols[5] || '';
-                    if (!name || !hireDate) { skipped++; continue; }
-                    // 同名・同入社日の従業員を検索、なければ追加
-                    var emp = employeesData.find(function(e) {
-                        return e.name === name && e.hireDate === hireDate;
-                    });
-                    if (!emp) {
-                        emp = {
-                            id: getNextEmployeeId(),
-                            name: name,
-                            kana: kana || '',
-                            hireDate: hireDate,
-                            status: 'active',
-                            retirementDate: null,
-                            memo: ''
-                        };
-                        employeesData.push(emp);
-                        added++;
-                    }
-                    // 消化日があれば登録
+                    var name = cols[0]; var kana = cols[1] || ''; var hireDate = cols[2];
+                    var consumeDate = cols[3]; var consumeType = cols[4]; var memo = cols[5] || '';
+                    if (!name || !hireDate) continue;
+                    var key = name + '_' + hireDate;
+                    if (!empCache[key]) empCache[key] = { name: name, kana: kana, hireDate: hireDate, records: [] };
                     if (consumeDate) {
-                        var type = (consumeType === '半休') ? 0.5 : 1.0;
-                        leaveRecords.push({
-                            id: getNextRecordId(),
-                            employeeId: parseInt(emp.id),
-                            date: consumeDate,
-                            type: parseFloat(type),
-                            memo: memo,
-                            createdAt: new Date().toISOString()
-                        });
+                        empCache[key].records.push({ date: consumeDate, type: consumeType === '半休' ? 0.5 : 1.0, memo: memo });
                     }
                 }
-                saveEmployees();
-                saveRecords();
-                renderEmployeeList();
-                renderEmployeeSelect();
-                renderDashboard();
-                renderRegisterHistory();
-                renderHistory();
-                renderExpiring();
-                var resultDiv = document.getElementById('import-result');
-                if (resultDiv) {
-                    resultDiv.innerHTML = '<div class="alert alert-custom-success" style="margin-top:0;">✅ インポート完了：従業員 ' + added + '名追加、' + skipped + '行スキップ</div>';
-                }
+
+                var empKeys = Object.keys(empCache);
+                var processed = 0;
+
+                empKeys.forEach(function(key) {
+                    var item = empCache[key];
+                    // 既存チェック
+                    supabase.from('employees').select('id').eq('name', item.name).eq('hire_date', item.hireDate)
+                        .then(function(result) {
+                            var empId;
+                            var insertRecords = item.records;
+
+                            if (result.data && result.data.length > 0) {
+                                empId = result.data[0].id;
+                                insertRecords.forEach(function(rec) {
+                                    supabase.from('leave_records').insert([{ employee_id: empId, date: rec.date, type: rec.type, memo: rec.memo }]).then(function(){});
+                                });
+                                processed++;
+                                if (processed === empKeys.length) { loadData(); alert('インポート完了しました'); }
+                            } else {
+                                supabase.from('employees').insert([{ name: item.name, kana: item.kana, hire_date: item.hireDate, status: 'active', memo: '' }]).select()
+                                    .then(function(r2) {
+                                        if (r2.data && r2.data.length > 0) {
+                                            empId = r2.data[0].id;
+                                            insertRecords.forEach(function(rec) {
+                                                supabase.from('leave_records').insert([{ employee_id: empId, date: rec.date, type: rec.type, memo: rec.memo }]).then(function(){});
+                                            });
+                                        }
+                                        processed++;
+                                        if (processed === empKeys.length) { loadData(); alert('インポート完了しました'); }
+                                    });
+                            }
+                        });
+                });
+
+                if (empKeys.length === 0) { alert('有効なデータがありません'); }
             };
             reader.readAsText(file, 'UTF-8');
         }
@@ -2562,20 +2571,13 @@
         }
 
         function resetAllData() {
-            if (confirm('本当に全データをリセットしますか？\n\n・全従業員データ\n・全有給消化履歴\n・IDカウンタ\n\nこの操作は取り消せません。')) {
-                localStorage.removeItem(STORAGE_KEY_EMPLOYEES);
-                localStorage.removeItem(STORAGE_KEY_RECORDS);
-                localStorage.removeItem(STORAGE_KEY_EMP_COUNTER);
-                localStorage.removeItem(STORAGE_KEY_REC_COUNTER);
-                employeesData = [];
-                leaveRecords = [];
-                renderDashboard();
-                renderEmployeeList();
-                renderEmployeeSelect();
-                renderRegisterHistory();
-                renderHistory();
-                renderExpiring();
-                alert('全データをリセットしました。');
+            if (confirm('本当に全データをリセットしますか？\n\n・全従業員データ\n・全有給消化履歴\n\nこの操作は取り消せません。')) {
+                supabase.from('leave_records').delete().neq('id', 0).then(function() {
+                    supabase.from('employees').delete().neq('id', 0).then(function() {
+                        loadData();
+                        alert('全データをリセットしました。');
+                    });
+                });
             }
         }
 
@@ -2635,13 +2637,9 @@
         document.addEventListener('DOMContentLoaded', function() {
             console.log('=== 有給管理システム起動 ===');
             
-            // 初回起動時にデータをクリアしたい場合は、以下のコメントを外してください
-            // localStorage.clear();
-            // console.log('LocalStorageをクリアしました');
-            
             initSystem();
-            console.log('=== 初期化完了 ===');
         });
     </script>
+</div><!-- /app-screen -->
 </body>
 </html>
