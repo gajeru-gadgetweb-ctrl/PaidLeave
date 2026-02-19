@@ -1462,23 +1462,18 @@
                 nextGrantDays = getLeaveDaysByYears(years);
             }
 
-            // デバッグ用
-            var debugMode = emp.name && emp.name.indexOf('山田') !== -1;
-            if (debugMode) console.log('=== ' + emp.name + 'さんの残日数計算 ===');
-
             // 付与枠ごとに残日数を管理
-            var buckets = grants.map(function(g, idx) {
+            var buckets = grants.map(function(g) {
                 var gd = parseLocalDate(g.grantDate);
                 var ed = parseLocalDate(g.expiryDate);
                 // 日付のみで比較するため時刻を正規化
                 gd.setHours(0, 0, 0, 0);
                 ed.setHours(23, 59, 59, 999);
-                if (debugMode) console.log((idx+1) + '回目付与: ' + g.grantDate + ' ~ ' + g.expiryDate + ' (' + g.days + '日)');
                 return {
                     grantDate:  gd,
                     expiryDate: ed,
                     days: g.days,
-                    used: 0  // この付与から使った日数
+                    used: 0
                 };
             });
 
@@ -1487,7 +1482,6 @@
             var sortedRecords = records.slice().sort(function(a, b) {
                 return parseLocalDate(a.date) - parseLocalDate(b.date);
             });
-            if (debugMode) console.log('\n消化履歴: ' + sortedRecords.length + '件');
             
             // 消化を古い付与から順番に引く（FIFO）
             sortedRecords.forEach(function(rec) {
@@ -1506,37 +1500,22 @@
             // 有効な付与の残日数を合計
             todayDate.setHours(0, 0, 0, 0);
             var validRemaining = 0;
-            if (debugMode) console.log('\n各付与の使用状況:');
-            buckets.forEach(function(b, idx) {
+            buckets.forEach(function(b) {
                 var gd = new Date(b.grantDate);
                 gd.setHours(0, 0, 0, 0);
-                var isGranted = gd <= todayDate;
-                var isValid = b.expiryDate >= todayDate;
-                var remaining = b.days - b.used;
-                
-                if (debugMode) {
-                    console.log((idx+1) + '回目: ' + b.days + '日 - ' + b.used.toFixed(1) + '日 = ' + remaining.toFixed(1) + '日残 ' +
-                        '(付与済:' + (isGranted?'○':'×') + ' 有効:' + (isValid?'○':'×') + ')');
-                }
-                
                 // 付与日が今日以前、かつ使用期限が今日以降の場合のみ有効
-                if (isGranted && isValid && remaining > 0) {
-                    validRemaining += remaining;
+                if (gd <= todayDate && b.expiryDate >= todayDate) {
+                    var remaining = b.days - b.used;
+                    validRemaining += Math.max(0, remaining);
                 }
             });
 
             // 上限40日適用
-            var beforeLimit = validRemaining;
             validRemaining = Math.min(validRemaining, 40);
-            
-            if (debugMode) {
-                console.log('\n有効残日数: ' + beforeLimit.toFixed(1) + '日');
-                console.log('上限40日適用後: ' + validRemaining.toFixed(1) + '日');
-            }
 
             return {
                 remaining: validRemaining,
-                advance: 0,  // この方式では前借り計算は不要
+                advance: 0,
                 nextGrantDays: nextGrantDays
             };
         }
