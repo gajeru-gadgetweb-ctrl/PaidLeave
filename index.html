@@ -2500,67 +2500,93 @@
             showLoading();
             
             var reader = new FileReader();
-            reader.onload = async function(e) {
-                try {
-                    var text = e.target.result.replace(/^\uFEFF/, '');
-                    var lines = text.split('\n').filter(function(l) { return l.trim() !== ''; });
-                    if (lines.length < 2) { alert('データが空です'); hideLoading(); return; }
+            reader.onload = function(e) {
+                var text = e.target.result.replace(/^\uFEFF/, '');
+                var lines = text.split('\n').filter(function(l) { return l.trim() !== ''; });
+                if (lines.length < 2) { alert('データが空です'); hideLoading(); return; }
 
-                    var empCache = {};
+                var empCache = {};
 
-                    // CSVを解析
-                    for (var i = 1; i < lines.length; i++) {
-                        var cols = lines[i].split(',').map(function(c) { return c.trim().replace(/^"|"$/g, ''); });
-                        var name = cols[0]; var kana = cols[1] || ''; var hireDate = cols[2];
-                        var consumeDate = cols[3]; var consumeType = cols[4]; var memo = cols[5] || '';
-                        if (!name || !hireDate) continue;
-                        var key = name + '_' + hireDate;
-                        if (!empCache[key]) empCache[key] = { name: name, kana: kana, hireDate: hireDate, records: [] };
-                        if (consumeDate) {
-                            empCache[key].records.push({ date: consumeDate, type: consumeType === '半休' ? 0.5 : 1.0, memo: memo });
-                        }
+                // CSVを解析
+                for (var i = 1; i < lines.length; i++) {
+                    var cols = lines[i].split(',').map(function(c) { return c.trim().replace(/^"|"$/g, ''); });
+                    var name = cols[0]; var kana = cols[1] || ''; var hireDate = cols[2];
+                    var consumeDate = cols[3]; var consumeType = cols[4]; var memo = cols[5] || '';
+                    if (!name || !hireDate) continue;
+                    var key = name + '_' + hireDate;
+                    if (!empCache[key]) empCache[key] = { name: name, kana: kana, hireDate: hireDate, records: [] };
+                    if (consumeDate) {
+                        empCache[key].records.push({ date: consumeDate, type: consumeType === '半休' ? 0.5 : 1.0, memo: memo });
                     }
+                }
 
-                    var empKeys = Object.keys(empCache);
-                    if (empKeys.length === 0) { alert('有効なデータがありません'); hideLoading(); return; }
+                var empKeys = Object.keys(empCache);
+                if (empKeys.length === 0) { alert('有効なデータがありません'); hideLoading(); return; }
 
-                    // 従業員ごとに順次処理
-                    for (var idx = 0; idx < empKeys.length; idx++) {
-                        var key = empKeys[idx];
+                var totalRecords = 0;
+                empKeys.forEach(function(k) { totalRecords += empCache[k].records.length; });
+
+                // 従業員ごとに順次処理（Promise chain）
+                var chain = Promise.resolve();
+                
+                empKeys.forEach(function(key) {
+                    chain = chain.then(function() {
                         var item = empCache[key];
                         
                         // 既存チェック
-                        var result = await supabase.from('employees').select('id').eq('name', item.name).eq('hire_date', item.hireDate);
-                        
-                        var empId;
-                        if (result.data && result.data.length > 0) {
-                            empId = result.data[0].id;
-                        } else {
-                            // 新規従業員を作成
-                            var r2 = await supabase.from('employees').insert([{ name: item.name, kana: item.kana, hire_date: item.hireDate, status: 'active', memo: '' }]).select();
-                            if (r2.data && r2.data.length > 0) {
-                                empId = r2.data[0].id;
-                            }
-                        }
-                        
-                        // 消化レコードを順番に1件ずつ挿入
-                        if (empId && item.records.length > 0) {
-                            for (var j = 0; j < item.records.length; j++) {
-                                var rec = item.records[j];
-                                await supabase.from('leave_records').insert([{ employee_id: empId, date: rec.date, type: rec.type, memo: rec.memo }]);
-                            }
-                        }
-                    }
-                    
+                        return supabase.from('employees').select('id').eq('name', item.name).eq('hire_date', item.hireDate)
+                            .then(function(result) {
+                                var empId;
+                                
+                                if (result.data && result.data.length > 0) {
+                                    empId = result.data[0].id;
+                                    return Promise.resolve(empId);
+                                } else {
+                                    // 新規従業員を作成
+                                    return supabase.from('employees').insert([{ 
+                                        name: item.name, 
+                                        kana: item.kana, 
+                                        hire_date: item.hireDate, 
+                                        status: 'active', 
+                                        memo: '' 
+                                    }]).select().then(function(r2) {
+                                        if (r2.data && r2.data.length > 0) {
+                                            return r2.data[0].id;
+                                        }
+                                    });
+                                }
+                            })
+                            .then(function(empId) {
+                                // 消化レコードを順番に1件ずつ挿入
+                                var recordChain = Promise.resolve();
+                                
+                                item.records.forEach(function(rec) {
+                                    recordChain = recordChain.then(function() {
+                                        return supabase.from('leave_records').insert([{ 
+                                            employee_id: empId, 
+                                            date: rec.date, 
+                                            type: rec.type, 
+                                            memo: rec.memo 
+                                        }]);
+                                    });
+                                });
+                                
+                                return recordChain;
+                            });
+                    });
+                });
+                
+                // 全て完了後
+                chain.then(function() {
                     hideLoading();
-                    await loadData();
-                    alert('インポート完了しました（' + empKeys.length + '名、全' + lines.length + '件）');
-                    
-                } catch (error) {
+                    return loadData();
+                }).then(function() {
+                    alert('インポート完了しました（' + empKeys.length + '名、全' + totalRecords + '件）');
+                }).catch(function(error) {
                     hideLoading();
                     console.error('インポートエラー:', error);
                     alert('インポート中にエラーが発生しました: ' + error.message);
-                }
+                });
             };
             reader.readAsText(file, 'UTF-8');
         }
