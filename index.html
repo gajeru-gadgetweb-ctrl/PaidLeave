@@ -1447,49 +1447,98 @@
 
         function calculateRemainingDays(employeeId) {
             var emp = getEmployeeById(employeeId);
-            if (!emp) return 0;
+            if (!emp) return { remaining: 0, advance: 0, nextGrantDays: 0 };
 
             var grants = generateLeaveGrants(emp.hireDate);
-            if (grants.length === 0) return 0;
-
             var today = new Date();
             var todayDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
 
-            // 付与枠ごとに残日数を管理（parseLocalDateで日付オブジェクト化）
-            var buckets = grants.map(function(g) {
+            // 次回付与予定を計算
+            var nextGrantDays = 0;
+            if (grants.length === 0) {
+                nextGrantDays = getLeaveDaysByYears(0.5);
+            } else {
+                var years = grants.length + 0.5;
+                nextGrantDays = getLeaveDaysByYears(years);
+            }
+
+            // デバッグ用
+            var debugMode = emp.name && emp.name.indexOf('山田') !== -1;
+            if (debugMode) console.log('=== ' + emp.name + 'さんの残日数計算 ===');
+
+            // 付与枠ごとに残日数を管理
+            var buckets = grants.map(function(g, idx) {
+                var gd = parseLocalDate(g.grantDate);
+                var ed = parseLocalDate(g.expiryDate);
+                // 日付のみで比較するため時刻を正規化
+                gd.setHours(0, 0, 0, 0);
+                ed.setHours(23, 59, 59, 999);
+                if (debugMode) console.log((idx+1) + '回目付与: ' + g.grantDate + ' ~ ' + g.expiryDate + ' (' + g.days + '日)');
                 return {
-                    grantDate:  parseLocalDate(g.grantDate),
-                    expiryDate: parseLocalDate(g.expiryDate),
-                    remaining:  g.days
+                    grantDate:  gd,
+                    expiryDate: ed,
+                    days: g.days,
+                    used: 0  // この付与から使った日数
                 };
             });
 
-            // 消化履歴を日付順に並べる
+            // 消化履歴を日付順にソート
             var records = getRecordsByEmployeeId(employeeId);
             var sortedRecords = records.slice().sort(function(a, b) {
                 return parseLocalDate(a.date) - parseLocalDate(b.date);
             });
-
-            // 消化日時点で有効な付与枠のうち期限が早い順に消化を引く
+            if (debugMode) console.log('\n消化履歴: ' + sortedRecords.length + '件');
+            
+            // 消化を古い付与から順番に引く（FIFO）
             sortedRecords.forEach(function(rec) {
-                var consumeDate = parseLocalDate(rec.date);
                 var used = parseFloat(rec.type);
+                
+                // 古い付与から順に引いていく
                 for (var i = 0; i < buckets.length && used > 0; i++) {
-                    // その消化日時点で付与済み、かつ失効前の枠
-                    if (buckets[i].grantDate <= consumeDate && buckets[i].expiryDate >= consumeDate && buckets[i].remaining > 0) {
-                        var take = Math.min(buckets[i].remaining, used);
-                        buckets[i].remaining -= take;
+                    if (buckets[i].days - buckets[i].used > 0) {
+                        var take = Math.min(buckets[i].days - buckets[i].used, used);
+                        buckets[i].used += take;
                         used -= take;
                     }
                 }
             });
 
-            // 今日時点で有効な枠の残合計（上限40日）
-            var validRemaining = buckets.reduce(function(s, b) {
-                return s + (b.expiryDate >= todayDate ? b.remaining : 0);
-            }, 0);
+            // 有効な付与の残日数を合計
+            todayDate.setHours(0, 0, 0, 0);
+            var validRemaining = 0;
+            if (debugMode) console.log('\n各付与の使用状況:');
+            buckets.forEach(function(b, idx) {
+                var gd = new Date(b.grantDate);
+                gd.setHours(0, 0, 0, 0);
+                var isGranted = gd <= todayDate;
+                var isValid = b.expiryDate >= todayDate;
+                var remaining = b.days - b.used;
+                
+                if (debugMode) {
+                    console.log((idx+1) + '回目: ' + b.days + '日 - ' + b.used.toFixed(1) + '日 = ' + remaining.toFixed(1) + '日残 ' +
+                        '(付与済:' + (isGranted?'○':'×') + ' 有効:' + (isValid?'○':'×') + ')');
+                }
+                
+                // 付与日が今日以前、かつ使用期限が今日以降の場合のみ有効
+                if (isGranted && isValid && remaining > 0) {
+                    validRemaining += remaining;
+                }
+            });
 
-            return Math.max(0, Math.min(validRemaining, 40));
+            // 上限40日適用
+            var beforeLimit = validRemaining;
+            validRemaining = Math.min(validRemaining, 40);
+            
+            if (debugMode) {
+                console.log('\n有効残日数: ' + beforeLimit.toFixed(1) + '日');
+                console.log('上限40日適用後: ' + validRemaining.toFixed(1) + '日');
+            }
+
+            return {
+                remaining: validRemaining,
+                advance: 0,  // この方式では前借り計算は不要
+                nextGrantDays: nextGrantDays
+            };
         }
 
         function renderEmployeeSelect() {
@@ -1506,8 +1555,8 @@
 
             var html = '<option value="">従業員を選択してください</option>';
             activeEmployees.forEach(function(emp) {
-                var remaining = calculateRemainingDays(emp.id);
-                html += '<option value="' + emp.id + '">' + emp.name + '（残: ' + remaining.toFixed(1) + '日）</option>';
+                var result = calculateRemainingDays(emp.id);
+                html += '<option value="' + emp.id + '">' + emp.name + '（残: ' + result.remaining.toFixed(1) + '日）</option>';
             });
 
             select.innerHTML = html;
@@ -1558,7 +1607,7 @@
             // 平均残日数を計算
             var totalRemaining = 0;
             activeEmployees.forEach(function(emp) {
-                totalRemaining += calculateRemainingDays(emp.id);
+                totalRemaining += calculateRemainingDays(emp.id).remaining;
             });
             var averageRemaining = totalEmployees > 0 ? totalRemaining / totalEmployees : 0;
             
@@ -1792,7 +1841,7 @@
 
                 if (emp.status === 'active') {
                     var years = calculateYearsOfService(emp.hireDate);
-                    var remaining = calculateRemainingDays(emp.id);
+                    var result = calculateRemainingDays(emp.id);
                     var grants = generateLeaveGrants(emp.hireDate);
 
                     // 次の付与日：最後の付与日から1年後（まだ付与されていない場合は入社6ヶ月後）
@@ -1841,7 +1890,7 @@
                     html += '<td><strong>' + emp.name + '</strong>' + retiredBadge + '</td>';
                     html += '<td>' + formatDate(emp.hireDate) + '</td>';
                     html += '<td>' + years.toFixed(1) + '年</td>';
-                    html += '<td><span style="' + remainingStyle + '">' + remaining.toFixed(1) + '日</span></td>';
+                    html += '<td><span style="' + remainingStyle + '">' + result.remaining.toFixed(1) + '日</span></td>';
                     html += '<td>' + formatDate(nextGrantStr) + '</td>';
                     html += '<td class="' + expiryClass + '">' + nextExpiry + '</td>';
                     html += '<td class="' + expiryClass + '">' + expiryBold + '</td>';
@@ -1924,7 +1973,7 @@
             var years = calculateYearsOfService(emp.hireDate);
             var grants = generateLeaveGrants(emp.hireDate);
             var records = getRecordsByEmployeeId(employeeId);
-            var remaining = calculateRemainingDays(employeeId);
+            var result = calculateRemainingDays(employeeId);
             var totalGranted = grants.reduce(function(s, g) { return s + g.days; }, 0);
             totalGranted = Math.min(totalGranted, 40);
             var totalUsed = records.reduce(function(s, r) { return s + r.type; }, 0);
@@ -1965,7 +2014,7 @@
 
             // 有給残数カード
             html += '<div class="stats-grid">';
-            html += '<div class="stat-card"><div class="stat-label">残日数</div><div class="stat-value">' + remaining.toFixed(1) + '<span class="stat-unit">日</span></div></div>';
+            html += '<div class="stat-card"><div class="stat-label">残日数</div><div class="stat-value">' + result.remaining.toFixed(1) + '<span class="stat-unit">日</span></div></div>';
             html += '<div class="stat-card"><div class="stat-label">付与総数（有効分）</div><div class="stat-value">' + totalGranted.toFixed(1) + '<span class="stat-unit">日</span></div></div>';
             html += '<div class="stat-card"><div class="stat-label">消化済み（累計）</div><div class="stat-value">' + totalUsed.toFixed(1) + '<span class="stat-unit">日</span></div></div>';
             html += '<div class="stat-card"><div class="stat-label">今月の消化</div><div class="stat-value">' + thisMonthUsed.toFixed(1) + '<span class="stat-unit">日</span></div></div>';
@@ -2416,14 +2465,14 @@
 
             var emp = getEmployeeById(currentEmployeeId);
             var records = getRecordsByEmployeeId(currentEmployeeId);
-            var remaining = calculateRemainingDays(currentEmployeeId);
+            var result = calculateRemainingDays(currentEmployeeId);
 
             var data = [
                 ['従業員名', emp.name],
                 ['フリガナ', emp.kana],
                 ['入社日', formatDate(emp.hireDate)],
                 [''],
-                ['残日数', remaining.toFixed(1) + '日'],
+                ['残日数', result.remaining.toFixed(1) + '日'],
                 [''],
                 ['■ 消化履歴'],
                 ['日付', '区分', 'メモ']
@@ -2469,62 +2518,70 @@
             var file = fileInput.files[0];
             if (!file) { alert('CSVファイルを選択してください'); return; }
 
+            showLoading();
+            
             var reader = new FileReader();
-            reader.onload = function(e) {
-                var text = e.target.result.replace(/^\uFEFF/, '');
-                var lines = text.split('\n').filter(function(l) { return l.trim() !== ''; });
-                if (lines.length < 2) { alert('データが空です'); return; }
+            reader.onload = async function(e) {
+                try {
+                    var text = e.target.result.replace(/^\uFEFF/, '');
+                    var lines = text.split('\n').filter(function(l) { return l.trim() !== ''; });
+                    if (lines.length < 2) { alert('データが空です'); hideLoading(); return; }
 
-                var tasks = [];
-                var empCache = {};
+                    var empCache = {};
 
-                for (var i = 1; i < lines.length; i++) {
-                    var cols = lines[i].split(',').map(function(c) { return c.trim().replace(/^"|"$/g, ''); });
-                    var name = cols[0]; var kana = cols[1] || ''; var hireDate = cols[2];
-                    var consumeDate = cols[3]; var consumeType = cols[4]; var memo = cols[5] || '';
-                    if (!name || !hireDate) continue;
-                    var key = name + '_' + hireDate;
-                    if (!empCache[key]) empCache[key] = { name: name, kana: kana, hireDate: hireDate, records: [] };
-                    if (consumeDate) {
-                        empCache[key].records.push({ date: consumeDate, type: consumeType === '半休' ? 0.5 : 1.0, memo: memo });
+                    // CSVを解析
+                    for (var i = 1; i < lines.length; i++) {
+                        var cols = lines[i].split(',').map(function(c) { return c.trim().replace(/^"|"$/g, ''); });
+                        var name = cols[0]; var kana = cols[1] || ''; var hireDate = cols[2];
+                        var consumeDate = cols[3]; var consumeType = cols[4]; var memo = cols[5] || '';
+                        if (!name || !hireDate) continue;
+                        var key = name + '_' + hireDate;
+                        if (!empCache[key]) empCache[key] = { name: name, kana: kana, hireDate: hireDate, records: [] };
+                        if (consumeDate) {
+                            empCache[key].records.push({ date: consumeDate, type: consumeType === '半休' ? 0.5 : 1.0, memo: memo });
+                        }
                     }
-                }
 
-                var empKeys = Object.keys(empCache);
-                var processed = 0;
+                    var empKeys = Object.keys(empCache);
+                    if (empKeys.length === 0) { alert('有効なデータがありません'); hideLoading(); return; }
 
-                empKeys.forEach(function(key) {
-                    var item = empCache[key];
-                    // 既存チェック
-                    supabase.from('employees').select('id').eq('name', item.name).eq('hire_date', item.hireDate)
-                        .then(function(result) {
-                            var empId;
-                            var insertRecords = item.records;
-
-                            if (result.data && result.data.length > 0) {
-                                empId = result.data[0].id;
-                                insertRecords.forEach(function(rec) {
-                                    supabase.from('leave_records').insert([{ employee_id: empId, date: rec.date, type: rec.type, memo: rec.memo }]).then(function(){});
-                                });
-                                processed++;
-                                if (processed === empKeys.length) { loadData(); alert('インポート完了しました'); }
-                            } else {
-                                supabase.from('employees').insert([{ name: item.name, kana: item.kana, hire_date: item.hireDate, status: 'active', memo: '' }]).select()
-                                    .then(function(r2) {
-                                        if (r2.data && r2.data.length > 0) {
-                                            empId = r2.data[0].id;
-                                            insertRecords.forEach(function(rec) {
-                                                supabase.from('leave_records').insert([{ employee_id: empId, date: rec.date, type: rec.type, memo: rec.memo }]).then(function(){});
-                                            });
-                                        }
-                                        processed++;
-                                        if (processed === empKeys.length) { loadData(); alert('インポート完了しました'); }
-                                    });
+                    // 従業員ごとに順次処理
+                    for (var idx = 0; idx < empKeys.length; idx++) {
+                        var key = empKeys[idx];
+                        var item = empCache[key];
+                        
+                        // 既存チェック
+                        var result = await supabase.from('employees').select('id').eq('name', item.name).eq('hire_date', item.hireDate);
+                        
+                        var empId;
+                        if (result.data && result.data.length > 0) {
+                            empId = result.data[0].id;
+                        } else {
+                            // 新規従業員を作成
+                            var r2 = await supabase.from('employees').insert([{ name: item.name, kana: item.kana, hire_date: item.hireDate, status: 'active', memo: '' }]).select();
+                            if (r2.data && r2.data.length > 0) {
+                                empId = r2.data[0].id;
                             }
-                        });
-                });
-
-                if (empKeys.length === 0) { alert('有効なデータがありません'); }
+                        }
+                        
+                        // 消化レコードを順番に1件ずつ挿入
+                        if (empId && item.records.length > 0) {
+                            for (var j = 0; j < item.records.length; j++) {
+                                var rec = item.records[j];
+                                await supabase.from('leave_records').insert([{ employee_id: empId, date: rec.date, type: rec.type, memo: rec.memo }]);
+                            }
+                        }
+                    }
+                    
+                    hideLoading();
+                    await loadData();
+                    alert('インポート完了しました（' + empKeys.length + '名、全' + lines.length + '件）');
+                    
+                } catch (error) {
+                    hideLoading();
+                    console.error('インポートエラー:', error);
+                    alert('インポート中にエラーが発生しました: ' + error.message);
+                }
             };
             reader.readAsText(file, 'UTF-8');
         }
@@ -2537,13 +2594,13 @@
             var bom = '\uFEFF';
             var rows = [['氏名', 'フリガナ', '入社日', '在籍状況', '残日数', '消化日', '消化区分', 'メモ']];
             employeesData.forEach(function(emp) {
-                var remaining = calculateRemainingDays(emp.id);
+                var result = calculateRemainingDays(emp.id);
                 var records = getRecordsByEmployeeId(emp.id);
                 if (records.length === 0) {
-                    rows.push([emp.name, emp.kana, emp.hireDate, emp.status === 'active' ? '在籍' : '退社済み', remaining.toFixed(1), '', '', '']);
+                    rows.push([emp.name, emp.kana, emp.hireDate, emp.status === 'active' ? '在籍' : '退社済み', result.remaining.toFixed(1), '', '', '']);
                 } else {
                     records.forEach(function(rec) {
-                        rows.push([emp.name, emp.kana, emp.hireDate, emp.status === 'active' ? '在籍' : '退社済み', remaining.toFixed(1), rec.date, rec.type === 1.0 ? '全休' : '半休', rec.memo || '']);
+                        rows.push([emp.name, emp.kana, emp.hireDate, emp.status === 'active' ? '在籍' : '退社済み', result.remaining.toFixed(1), rec.date, rec.type === 1.0 ? '全休' : '半休', rec.memo || '']);
                     });
                 }
             });
