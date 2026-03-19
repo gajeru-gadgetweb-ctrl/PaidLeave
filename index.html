@@ -1328,6 +1328,7 @@
                         date: r.date || '',
                         type: parseFloat(r.type) || 1.0,
                         memo: r.memo || '',
+                        grantDate: r.grant_date || null,
                         createdAt: r.created_at || ''
                     };
                 });
@@ -1466,33 +1467,40 @@
             var buckets = grants.map(function(g) {
                 var gd = parseLocalDate(g.grantDate);
                 var ed = parseLocalDate(g.expiryDate);
-                // 日付のみで比較するため時刻を正規化
                 gd.setHours(0, 0, 0, 0);
                 ed.setHours(23, 59, 59, 999);
                 return {
                     grantDate:  gd,
+                    grantDateStr: g.grantDate,
                     expiryDate: ed,
                     days: g.days,
                     used: 0
                 };
             });
 
-            // 消化履歴を日付順にソート
+            // 消化履歴を付与ごとに振り分け（grant_date基準）
             var records = getRecordsByEmployeeId(employeeId);
-            var sortedRecords = records.slice().sort(function(a, b) {
-                return parseLocalDate(a.date) - parseLocalDate(b.date);
-            });
             
-            // 消化を古い付与から順番に引く（FIFO）
-            sortedRecords.forEach(function(rec) {
+            records.forEach(function(rec) {
                 var used = parseFloat(rec.type);
+                var recGrantDate = rec.grantDate; // Supabaseから取得したgrant_date
                 
-                // 古い付与から順に引いていく
-                for (var i = 0; i < buckets.length && used > 0; i++) {
-                    if (buckets[i].days - buckets[i].used > 0) {
-                        var take = Math.min(buckets[i].days - buckets[i].used, used);
-                        buckets[i].used += take;
-                        used -= take;
+                if (recGrantDate) {
+                    // 該当する付与を探す
+                    for (var i = 0; i < buckets.length; i++) {
+                        if (buckets[i].grantDateStr === recGrantDate) {
+                            buckets[i].used += used;
+                            break;
+                        }
+                    }
+                } else {
+                    // grant_dateが無い場合はFIFO（後方互換性のため）
+                    for (var i = 0; i < buckets.length && used > 0; i++) {
+                        if (buckets[i].days - buckets[i].used > 0) {
+                            var take = Math.min(buckets[i].days - buckets[i].used, used);
+                            buckets[i].used += take;
+                            used -= take;
+                        }
                     }
                 }
             });
@@ -1503,7 +1511,6 @@
             buckets.forEach(function(b) {
                 var gd = new Date(b.grantDate);
                 gd.setHours(0, 0, 0, 0);
-                // 付与日が今日以前、かつ使用期限が今日以降の場合のみ有効
                 if (gd <= todayDate && b.expiryDate >= todayDate) {
                     var remaining = b.days - b.used;
                     validRemaining += Math.max(0, remaining);
