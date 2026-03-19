@@ -2399,14 +2399,40 @@
             }
 
             var emp = getEmployeeById(employeeId);
+            
+            // どの付与から使うか自動判定（FIFO方式）
+            var grants = generateLeaveGrants(emp.hireDate);
+            var today = new Date();
+            var consumeDate = parseLocalDate(date);
+            
+            // 有効な付与を古い順に並べる
+            var validGrants = [];
+            grants.forEach(function(g) {
+                var gd = parseLocalDate(g.grantDate);
+                var ed = parseLocalDate(g.expiryDate);
+                // 消化日時点で有効な付与のみ
+                if (gd <= consumeDate && ed >= consumeDate) {
+                    validGrants.push(g);
+                }
+            });
+            
+            if (validGrants.length === 0) {
+                alert('この日付には使用できる有給がありません');
+                return;
+            }
+            
+            // 一番古い有効な付与から使う
+            var targetGrant = validGrants[0];
+            
             supabase.from('leave_records').insert([{
                 employee_id: employeeId,
                 date: date,
                 type: type,
-                memo: memo
+                memo: memo,
+                grant_date: targetGrant.grantDate
             }]).then(function(result) {
                 if (result.error) { alert('登録に失敗しました: ' + result.error.message); return; }
-                alert('有給を登録しました\n従業員: ' + emp.name + '\n日付: ' + formatDate(date) + '\n区分: ' + type + '日');
+                alert('有給を登録しました\n従業員: ' + emp.name + '\n日付: ' + formatDate(date) + '\n区分: ' + type + '日\n付与: ' + formatDate(targetGrant.grantDate) + 'から使用');
                 document.getElementById('register-form').reset();
                 resetLeaveTypeButtons();
                 loadData();
