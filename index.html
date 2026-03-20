@@ -1298,7 +1298,7 @@
         // ━━━ データ読み込み ━━━
         function loadData() {
             showLoading(true);
-            Promise.all([
+            return Promise.all([
                 supabase.from('employees').select('*').order('kana'),
                 supabase.from('leave_records').select('*').order('date')
             ]).then(function(results) {
@@ -2609,9 +2609,15 @@
                             // 全て完了
                             console.log('=== インポート完了 ===');
                             showLoading(false);
-                            loadData().then(function() {
+                            
+                            var result = loadData();
+                            if (result && result.then) {
+                                result.then(function() {
+                                    alert('インポート完了しました\n従業員: ' + empKeys.length + '名\n消化履歴: ' + totalRecords + '件');
+                                });
+                            } else {
                                 alert('インポート完了しました\n従業員: ' + empKeys.length + '名\n消化履歴: ' + totalRecords + '件');
-                            });
+                            }
                             return;
                         }
                         
