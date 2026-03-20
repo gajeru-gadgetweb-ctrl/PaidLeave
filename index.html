@@ -2546,7 +2546,7 @@
                     
                     if (lines.length < 2) { 
                         alert('データが空です'); 
-                        hideLoading(); 
+                        showLoading(false); 
                         return; 
                     }
 
@@ -2591,7 +2591,7 @@
                     
                     if (empKeys.length === 0) { 
                         alert('有効なデータがありません'); 
-                        hideLoading(); 
+                        showLoading(false); 
                         return; 
                     }
 
@@ -2608,7 +2608,7 @@
                         if (empIndex >= empKeys.length) {
                             // 全て完了
                             console.log('=== インポート完了 ===');
-                            hideLoading();
+                            showLoading(false);
                             loadData().then(function() {
                                 alert('インポート完了しました\n従業員: ' + empKeys.length + '名\n消化履歴: ' + totalRecords + '件');
                             });
@@ -2706,14 +2706,14 @@
                     processNextEmployee();
                     
                 } catch (error) {
-                    hideLoading();
+                    showLoading(false);
                     console.error('インポートエラー:', error);
                     alert('インポート中にエラーが発生しました\n' + error.message + '\n\nコンソールを確認してください');
                 }
             };
             
             reader.onerror = function(error) {
-                hideLoading();
+                showLoading(false);
                 console.error('ファイル読み込みエラー:', error);
                 alert('ファイルの読み込みに失敗しました');
             };
