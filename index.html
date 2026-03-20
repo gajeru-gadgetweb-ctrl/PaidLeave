@@ -1463,12 +1463,17 @@
                 nextGrantDays = getLeaveDaysByYears(years);
             }
 
+            // デバッグ用
+            var debugMode = emp.name && emp.name.indexOf('大和田') !== -1;
+            if (debugMode) console.log('=== ' + emp.name + 'さんの残日数計算 ===');
+
             // 付与枠ごとに残日数を管理
-            var buckets = grants.map(function(g) {
+            var buckets = grants.map(function(g, idx) {
                 var gd = parseLocalDate(g.grantDate);
                 var ed = parseLocalDate(g.expiryDate);
                 gd.setHours(0, 0, 0, 0);
                 ed.setHours(23, 59, 59, 999);
+                if (debugMode) console.log((idx+1) + '回目付与: ' + g.grantDate + ' (' + g.days + '日)');
                 return {
                     grantDate:  gd,
                     grantDateStr: g.grantDate,
@@ -1481,20 +1486,29 @@
             // 消化履歴を付与ごとに振り分け（grant_date基準）
             var records = getRecordsByEmployeeId(employeeId);
             
+            if (debugMode) console.log('\n消化履歴: ' + records.length + '件');
+            
             records.forEach(function(rec) {
                 var used = parseFloat(rec.type);
                 var recGrantDate = rec.grantDate; // Supabaseから取得したgrant_date
                 
                 if (recGrantDate) {
                     // 該当する付与を探す
+                    var found = false;
                     for (var i = 0; i < buckets.length; i++) {
                         if (buckets[i].grantDateStr === recGrantDate) {
                             buckets[i].used += used;
+                            found = true;
+                            if (debugMode) console.log('  ' + rec.date + ': ' + used + '日 → ' + recGrantDate + '付与から引く');
                             break;
                         }
                     }
+                    if (debugMode && !found) {
+                        console.log('  警告: ' + rec.date + ' の付与日 ' + recGrantDate + ' が見つかりません');
+                    }
                 } else {
                     // grant_dateが無い場合はFIFO（後方互換性のため）
+                    if (debugMode) console.log('  ' + rec.date + ': ' + used + '日 (grant_date なし、FIFO)');
                     for (var i = 0; i < buckets.length && used > 0; i++) {
                         if (buckets[i].days - buckets[i].used > 0) {
                             var take = Math.min(buckets[i].days - buckets[i].used, used);
@@ -1508,17 +1522,30 @@
             // 有効な付与の残日数を合計
             todayDate.setHours(0, 0, 0, 0);
             var validRemaining = 0;
-            buckets.forEach(function(b) {
+            if (debugMode) console.log('\n各付与の使用状況:');
+            buckets.forEach(function(b, idx) {
                 var gd = new Date(b.grantDate);
                 gd.setHours(0, 0, 0, 0);
+                var isValid = b.expiryDate >= todayDate;
+                var remaining = b.days - b.used;
+                
+                if (debugMode) {
+                    console.log((idx+1) + '回目: ' + b.days + '日 - ' + b.used.toFixed(1) + '日 = ' + remaining.toFixed(1) + '日残 (有効:' + (isValid?'○':'×') + ')');
+                }
+                
                 if (gd <= todayDate && b.expiryDate >= todayDate) {
-                    var remaining = b.days - b.used;
                     validRemaining += Math.max(0, remaining);
                 }
             });
 
             // 上限40日適用
+            var beforeLimit = validRemaining;
             validRemaining = Math.min(validRemaining, 40);
+            
+            if (debugMode) {
+                console.log('\n有効残日数合計: ' + beforeLimit.toFixed(1) + '日');
+                console.log('上限40日適用後: ' + validRemaining.toFixed(1) + '日');
+            }
 
             return {
                 remaining: validRemaining,
