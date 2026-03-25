@@ -1519,6 +1519,20 @@
                 }
             });
 
+            // 山田翔さん専用：前借り処理
+            var isYamada = emp.name && emp.name.indexOf('山田') !== -1 && emp.name.indexOf('翔') !== -1;
+            if (isYamada) {
+                // 前借り分を次の付与に繰り越す
+                for (var i = 0; i < buckets.length - 1; i++) {
+                    var remaining = buckets[i].days - buckets[i].used;
+                    if (remaining < 0) {
+                        // マイナス分を次の付与から引く
+                        buckets[i + 1].used += Math.abs(remaining);
+                        buckets[i].used = buckets[i].days; // 使用日数を付与日数に合わせる
+                    }
+                }
+            }
+
             // 有効な付与の残日数を合計
             todayDate.setHours(0, 0, 0, 0);
             var validRemaining = 0;
